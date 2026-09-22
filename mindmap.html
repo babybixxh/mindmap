@@ -59,9 +59,30 @@
   #bar select option { color:#16281f; }
   #bar .sep { width:1px; height:28px; background:rgba(255,255,255,.22); margin:0 3px; flex:none; }
 
+  /* ---- Onglets (feuilles) ---- */
+  #tabs {
+    position:fixed; left:0; right:0; bottom:0; height:42px; z-index:16;
+    display:flex; align-items:center; gap:5px; padding:5px 10px; overflow-x:auto;
+    background:var(--panel); border-top:1px solid var(--line); box-shadow:0 -2px 12px rgba(0,0,0,.07);
+    scrollbar-width:thin;
+  }
+  #tabs::-webkit-scrollbar { height:5px; }
+  .tab {
+    display:flex; align-items:center; gap:7px; padding:5px 11px; border-radius:9px;
+    background:var(--bg); border:1px solid var(--line); color:var(--muted); font-size:12.5px;
+    cursor:pointer; white-space:nowrap; flex:none; max-width:220px;
+  }
+  .tab .tabname { overflow:hidden; text-overflow:ellipsis; max-width:170px; }
+  .tab:hover { color:var(--ink); }
+  .tab.active { background:linear-gradient(120deg,var(--green),var(--green-d)); color:#fff; border-color:transparent; font-weight:600; }
+  .tab .tabx { opacity:.5; font-size:15px; line-height:1; }
+  .tab .tabx:hover { opacity:1; }
+  #tabadd { flex:none; border:1px dashed var(--line); background:transparent; color:var(--muted); border-radius:9px; padding:5px 11px; font:inherit; font-size:12.5px; cursor:pointer; }
+  #tabadd:hover { color:var(--ink); border-color:var(--green); }
+
   /* ---- Zone de dessin ---- */
   #stage {
-    position:absolute; inset:56px 0 0 0; overflow:hidden; cursor:grab;
+    position:absolute; inset:56px 0 42px 0; overflow:hidden; cursor:grab;
     background-image:radial-gradient(var(--dot) 1.4px, transparent 1.4px);
     background-size:24px 24px; background-position:-12px -12px;
   }
@@ -139,7 +160,7 @@
 
   /* ---- Aide / pied ---- */
   #hint {
-    position:fixed; left:12px; bottom:12px; z-index:15; max-width:min(92vw,660px);
+    position:fixed; left:12px; bottom:52px; z-index:15; max-width:min(92vw,660px);
     background:var(--panel); border:1px solid var(--line); border-radius:12px;
     padding:10px 13px; font-size:12.5px; color:var(--muted); box-shadow:0 4px 16px rgba(0,0,0,.12);
   }
@@ -150,7 +171,7 @@
   }
   #hint .close { float:right; cursor:pointer; color:var(--muted); margin-left:8px; }
   #zoomlbl {
-    position:fixed; right:12px; bottom:12px; z-index:15; background:var(--panel);
+    position:fixed; right:12px; bottom:52px; z-index:15; background:var(--panel);
     border:1px solid var(--line); border-radius:9px; padding:6px 10px; font-size:12px;
     color:var(--muted); box-shadow:0 4px 16px rgba(0,0,0,.12);
   }
@@ -202,6 +223,7 @@
   </div>
 </div>
 <div id="ghost"></div>
+<div id="tabs"></div>
 
 <div id="modal" class="hidden">
   <div class="sheet">
@@ -249,21 +271,18 @@
     return { root: { id: nid(), text: "Sujet central", collapsed: false, children: [] } };
   }
 
-  const STORE_KEY = "mindmap.doc.v1";
+  const STORE_KEY = "mindmap.doc.v1";     // ancien format (une seule carte) — migré
   const TITLE_KEY = "mindmap.title.v1";
   const THEME_KEY = "mindmap.theme.v1";
   const LAYOUT_KEY = "mindmap.layout.v1";
   const INIT_KEY  = "mindmap.init.v1";
+  const BOOK_KEY  = "mindmap.book.v1";    // classeur : plusieurs feuilles
+  const JOB_KEY   = "mindmap.jobsheet.v1"; // drapeau : feuille « Recherche d'emploi » ajoutée une fois
+  // book = { active, sheets:[{ name, layout, root, sel }] }. doc.root pointe sur la feuille active.
+  let book = { active: 0, sheets: [] };
   let doc, selId, editing = false, editSnap = null;
   let LAYOUT = "both";
 
-  function loadDoc() {
-    try {
-      const raw = localStorage.getItem(STORE_KEY);
-      if (raw) { const d = JSON.parse(raw); if (d && d.root) { adopt(d.root); return d; } }
-    } catch (e) {}
-    return freshDoc();
-  }
   function adopt(node) {
     node.id = nid();
     node.collapsed = !!node.collapsed;
@@ -272,14 +291,21 @@
     node.children = Array.isArray(node.children) ? node.children : [];
     node.children.forEach(adopt);
   }
-  function persist() { try { localStorage.setItem(STORE_KEY, JSON.stringify(stripDoc())); } catch (e) {} }
   function stripNode(n) {
     const o = { text: n.text, collapsed: n.collapsed, children: n.children.map(stripNode) };
     if (n.color) o.color = n.color;
     if (n.link) o.link = n.link;
     return o;
   }
-  function stripDoc() { return { root: stripNode(doc.root) }; }
+  // Répercute l'état courant dans la feuille active, puis sauvegarde tout le classeur.
+  function persist() {
+    const s = book.sheets[book.active];
+    if (s) { s.root = doc.root; s.layout = LAYOUT; s.sel = selId; s.name = titleInput.value; }
+    try {
+      const data = { active: book.active, sheets: book.sheets.map(sh => ({ name: sh.name, layout: sh.layout || "both", sel: sh.sel, root: stripNode(sh.root) })) };
+      localStorage.setItem(BOOK_KEY, JSON.stringify(data));
+    } catch (e) {}
+  }
 
   // ---------- Historique ----------
   const hist = [], redo = [];
@@ -687,12 +713,59 @@
   $("fit").onclick = fit;
   $("zin").onclick = () => zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 1.15);
   $("zout").onclick = () => zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, 1 / 1.15);
-  $("neu").onclick = () => { if (confirm("Nouvelle carte ? La carte actuelle sera remplacée (pense à exporter en JSON).")) { pushHistory(); doc = freshDoc(); selId = doc.root.id; render(); fit(); } };
+  $("neu").onclick = () => { if (confirm("Vider cette feuille ? (astuce : 💾 JSON pour la sauvegarder d'abord)")) { pushHistory(); doc = freshDoc(); selId = doc.root.id; render(); fit(); } };
   $("theme").onclick = () => { const dark = document.body.classList.toggle("dark"); $("theme").textContent = dark ? "☀️" : "🌙"; try { localStorage.setItem(THEME_KEY, dark ? "1" : "0"); } catch (e) {} };
-  $("layout").onchange = (e) => { LAYOUT = e.target.value; try { localStorage.setItem(LAYOUT_KEY, LAYOUT); } catch (er) {} render(); fit(); };
+  $("layout").onchange = (e) => { LAYOUT = e.target.value; render(); fit(); };
 
   const titleInput = $("title");
-  titleInput.addEventListener("input", () => { document.title = titleInput.value.trim() || "Mind Map"; try { localStorage.setItem(TITLE_KEY, titleInput.value); } catch (e) {} });
+  titleInput.addEventListener("input", () => {
+    const s = book.sheets[book.active]; if (s) s.name = titleInput.value;
+    document.title = titleInput.value.trim() || "Mind Map";
+    renderTabs();
+  });
+
+  // ---------- Feuilles (onglets type Excel) ----------
+  function loadActive() {
+    const s = book.sheets[book.active];
+    doc = { root: s.root };
+    LAYOUT = s.layout || "both"; $("layout").value = LAYOUT;
+    titleInput.value = s.name || ""; document.title = (s.name || "Mind Map");
+    selId = (s.sel && find(s.sel)) ? s.sel : s.root.id;
+    hist.length = 0; redo.length = 0;
+  }
+  function switchSheet(i) { if (i === book.active) return; commitEdit(); persist(); book.active = i; loadActive(); render(); fit(); renderTabs(); }
+  function addSheet() {
+    commitEdit(); persist();
+    const root = { id: nid(), text: "Sujet central", collapsed: false, children: [] };
+    book.sheets.push({ name: "Feuille " + (book.sheets.length + 1), layout: "both", root, sel: root.id });
+    book.active = book.sheets.length - 1; loadActive(); render(); fit(); renderTabs();
+  }
+  function deleteSheet(i) {
+    if (book.sheets.length <= 1) { alert("Il faut au moins une feuille."); return; }
+    if (!confirm("Supprimer la feuille « " + book.sheets[i].name + " » ?")) return;
+    book.sheets.splice(i, 1);
+    if (book.active >= book.sheets.length) book.active = book.sheets.length - 1;
+    else if (book.active > i) book.active--;
+    loadActive(); render(); fit(); renderTabs();
+  }
+  function renameSheet(i) {
+    const v = prompt("Nom de la feuille :", book.sheets[i].name); if (v === null) return;
+    book.sheets[i].name = v.trim() || book.sheets[i].name;
+    if (i === book.active) { titleInput.value = book.sheets[i].name; document.title = book.sheets[i].name; }
+    renderTabs(); persist();
+  }
+  function renderTabs() {
+    const el = $("tabs"); el.innerHTML = "";
+    book.sheets.forEach((s, i) => {
+      const t = document.createElement("div"); t.className = "tab" + (i === book.active ? " active" : "");
+      const nm = document.createElement("span"); nm.className = "tabname"; nm.textContent = s.name; t.appendChild(nm);
+      const x = document.createElement("span"); x.className = "tabx"; x.textContent = "×"; x.title = "Supprimer la feuille"; t.appendChild(x);
+      t.addEventListener("click", (e) => { if (e.target === x) { e.stopPropagation(); deleteSheet(i); } else switchSheet(i); });
+      t.addEventListener("dblclick", () => renameSheet(i));
+      el.appendChild(t);
+    });
+    const add = document.createElement("button"); add.id = "tabadd"; add.textContent = "＋ Feuille"; add.title = "Nouvelle feuille"; add.addEventListener("click", addSheet); el.appendChild(add);
+  }
 
   const colorsWrap = $("colors");
   PALETTE.forEach(col => { const s = document.createElement("span"); s.className = "swatch"; s.style.background = col; s.title = "Colorer la branche"; s.onclick = () => setColor(col); colorsWrap.appendChild(s); });
@@ -758,7 +831,7 @@
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 1500);
   }
-  $("save").onclick = () => download(slug() + ".json", JSON.stringify({ title: titleInput.value, root: stripDoc().root }, null, 2), "application/json");
+  $("save").onclick = () => download(slug() + ".json", JSON.stringify({ title: titleInput.value, layout: LAYOUT, root: stripNode(doc.root) }, null, 2), "application/json");
   $("md").onclick = () => {
     let out = "";
     (function w(n, d) { if (d === 0) out += "# " + n.text + "\n\n"; else out += "  ".repeat(d - 1) + "- " + (n.link ? `[${n.text}](${n.link})` : n.text) + "\n"; n.children.forEach(c => w(c, d + 1)); })(doc.root, 0);
@@ -771,9 +844,11 @@
     r.onload = () => {
       try {
         const d = JSON.parse(r.result); if (!d || !d.root) throw new Error("format");
-        pushHistory(); adopt(d.root); doc = { root: d.root }; selId = doc.root.id;
-        if (typeof d.title === "string") { titleInput.value = d.title; document.title = d.title || "Mind Map"; try { localStorage.setItem(TITLE_KEY, d.title); } catch (er) {} }
-        render(); fit();
+        commitEdit(); persist(); adopt(d.root);
+        const nm = (typeof d.title === "string" && d.title.trim()) ? d.title.trim() : (f.name.replace(/\.json$/i, "") || "Importé");
+        const lay = (d.layout === "right" || d.layout === "down" || d.layout === "both") ? d.layout : "both";
+        book.sheets.push({ name: nm, layout: lay, root: d.root, sel: d.root.id }); // importé comme NOUVELLE feuille
+        book.active = book.sheets.length - 1; loadActive(); render(); fit(); renderTabs();
       } catch (err) { alert("Fichier JSON invalide."); }
     };
     r.readAsText(f); e.target.value = "";
@@ -815,21 +890,105 @@
 
   $("hintClose").onclick = () => { $("hint").style.display = "none"; };
 
-  // ---------- Démarrage ----------
-  try { if (localStorage.getItem(THEME_KEY) === "1") { document.body.classList.add("dark"); $("theme").textContent = "☀️"; } } catch (e) {}
-  try { const l = localStorage.getItem(LAYOUT_KEY); if (l === "right" || l === "down" || l === "both") LAYOUT = l; } catch (e) {}
-  $("layout").value = LAYOUT;
-  try { const t = localStorage.getItem(TITLE_KEY); if (t) { titleInput.value = t; document.title = t || "Mind Map"; } } catch (e) {}
-  doc = loadDoc(); selId = doc.root.id; applyView(); render();
-  let firstRun = false; try { firstRun = !localStorage.getItem(INIT_KEY); } catch (e) {}
-  if (firstRun && !doc.root.children.length) {
-    ["Idée 1", "Idée 2", "Idée 3"].forEach(t => doc.root.children.push({ id: nid(), text: t, collapsed: false, children: [] }));
-    try { localStorage.setItem(INIT_KEY, "1"); } catch (e) {}
-    render();
+  // ---------- Feuille pré-remplie : cartographie de la recherche d'emploi ----------
+  // Construit un arbre à partir d'une spec compacte (string = feuille ; {t,c,link,collapsed} = branche).
+  function mk(s) {
+    if (typeof s === "string") return { id: nid(), text: s, collapsed: false, children: [] };
+    const n = { id: nid(), text: s.t, collapsed: !!s.collapsed, children: (s.c || []).map(mk) };
+    if (s.link) n.link = s.link;
+    return n;
   }
-  fit(); refreshHistoryButtons();
+  function buildJobSheet() {
+    const KEYWORDS = ["consultant climat","consultant stratégie climat","consultant transition","climate solutions consultant","carbon analyst","risque climatique","adaptation climatique","climate risk analyst","adaptation specialist","climate finance","energy analyst","bilan carbone","transition écologique","chargé mission climat","décarbonation","politiques climatiques","responsable développement durable","chargé de mission développement durable"];
+    const REMOTE = ["climate","sustainability","carbon","ESG","decarbonization","climat","durable","carbone","climate risk","physical risk","adaptation","resilience","nature-based","natural capital","parametric","agtech","TCFD","policy analyst","programme officer","energy model","scenario analysis","climate economist","quantitative analyst"];
+    const ENR = ["énergies renouvelables","photovoltaïque","énergie solaire","parc solaire","centrale solaire","éolien","biomasse","méthanisation","géothermie","hydrogène vert","power to gas"];
+    const spec = { t: "Recherche d'emploi climat", c: [
+      { t: "👤 Profil", c: ["Ingénieur ECAM LaSalle (méca/thermo)","MSc ESSEC Strategy","3 ans conseil transfo — Bartle","3 ans stratégie climat — ekodev","Bilans carbone GHG Protocol","Formateur ADEME ACT Pas à Pas",
+        { t: "Séniorité visée", c: ["Associate → Manager","Chargé·e senior / Consultant·e","Officer / Specialist / Advisor / Analyst"] },
+        { t: "Rejette (trop senior)", c: ["Head / Director / Chief / VP / Partner","10+ ans requis ou PhD requis"] } ] },
+      { t: "📍 Zones", c: [ { t: "Marseille & PACA (prioritaire)", c: ["Marseille","Aix-en-Provence","Toulon","Nice","Avignon"] }, "Paris", "Full télétravail (Europe)" ] },
+      { t: "🎯 Postes visés", c: ["Consultant·e climat senior","Chargé·e de mission climat","Expert politiques publiques climat","Décarbonation / bilan carbone / SBTi","Développement durable & transition (PACA)","Postes internes climat en entreprise",
+        { t: "À éviter", c: ["RSE générique (reporting sans climat)"] } ] },
+      { t: "🔑 Mots-clés", collapsed: true, c: [
+        { t: "Conseil / climat", c: KEYWORDS },
+        { t: "Remote (EN/FR)", c: REMOTE },
+        { t: "Secteur public", c: ["climat","développement durable","transition écologique","environnement","RSE","énergie"] },
+        { t: "EnR Marseille", c: ENR } ] },
+      { t: "🌐 Sources", c: [
+        { t: "Généralistes", c: ["Adzuna","France Travail","Hellowork","Jooble","APEC","LinkedIn"] },
+        { t: "Spécialisés climat / ESS", c: ["Greenjob.fr","Jobs that make sense","ESS","ADEME"] },
+        { t: "ATS entreprises", c: ["Welcome to the Jungle","Greenhouse","Lever","SmartRecruiters"] },
+        { t: "International / ONG", c: ["ReliefWeb","UNjobs"] },
+        { t: "Public / local", c: ["Service Public","Open-C (Marseille)"] },
+        { t: "Remote EU", c: ["Remotive","Arbeitnow"] } ] },
+      { t: "🏢 Entreprises ciblées", collapsed: true, c: [
+        { t: "Conseil climat / RSE", c: ["Carbone 4","Quantis","Utopies","BL évolution","I Care","Carbon Cutter","adaptation/s","Blunomy","(RE)SET","CCI France","Axionable"] },
+        { t: "Compta carbone (SaaS)", c: ["Sami","Greenly","Aktio","Tennaxia","Traace","Sweep","Carbometrix","Carbo","Carbonfact","Watershed","Plan A","Normative","Isometric","Nelson","Persefoni","Sinai Technologies","CarbonChain"] },
+        { t: "Data ESG / CSRD", c: ["EcoVadis","Deepki","Greenomy","Position Green","Coolset"] },
+        { t: "Data climat « hard »", c: ["Kayrros","AXA Climate","Descartes Underwriting","Callendar","namR","Murmuration","Finres","Resallience"] },
+        { t: "Assurance / risque physique", c: ["Howden","Marsh McLennan","Aon","WTW","Guy Carpenter","SCOR","Swiss Re","Munich Re","Jupiter Intelligence","Cervest","Climate X","Mitiga Solutions","XDI","Sust Global","Kettle","ICEYE","Moody's RMS","Fathom","riskthinking.AI"] },
+        { t: "Think tanks / instituts", c: ["EEA","I4CE","Climate Bonds Initiative","WRI","Climate Analytics","IDDRI","Carbon Tracker","2° Investing Initiative","ClimateWorks","Cadmus","ICF","WSP","Ramboll","CDP","Climate Policy Initiative","Bruegel","Ember","RMI","E3G","Agora Energiewende","CREA","ODI","Chatham House","JRC","NewClimate Institute","Wuppertal Institute","IEEFA","Transport & Environment","WWF","Potsdam Institute","Grantham Research Institute","Oxford Smith School","IISD","Stockholm Environment Institute","CISL","IIASA","WattTime","Climate TRACE","Terra Nova","The Shift Project"] },
+        { t: "Organisations internationales / bailleurs", c: ["Green Climate Fund","UNEP","UNEP FI","UNDP","World Bank","EIB","AFD","GIZ","Adaptation Fund","NDC Partnership","Global Center on Adaptation","IEA","OECD","IRENA","IPCC","UNFCCC","IMF","International Transport Forum","FAO","EBRD","KfW","Proparco","GEF","Climate Investment Funds","UNIDO","IFAD","WMO","UNITAR","UNECE","UN DESA","IFC","African Development Bank","Asian Development Bank","Inter-American Development Bank","New Development Bank","AIIB","British International Investment"] },
+        { t: "Institutions européennes", c: ["European Commission","European Court of Auditors","Eurostat","ACER"] },
+        { t: "Agro × climat", c: ["Soil Capital","Rize","Agreena","MyEasyCarbon","Carbon Maps","ITK","Sencrop","Weenat","CarbonFarm","Klim","Boomitra","Regrow","Cropin","aQysta","Perennial"] },
+        { t: "Industriels agroalimentaires", c: ["Danone","Bel","Bonduelle","Roquette","Savencia","InVivo","Sodiaal","Terrena"] },
+        { t: "Énergie / industrie", c: ["Metron","Purecontrol"] },
+        { t: "France — organismes publics", c: ["France Stratégie","CEREMA","DREAL PACA","DREAL","Caisse des Dépôts","Banque de France","Météo-France","Agence de l'eau RMC","OFB","BRGM","Région Sud","Métropole Aix-Marseille-Provence"] },
+        { t: "Méditerranée", c: ["Plan Bleu","MedECC","FEMISE","AVITEM","Institut de la Méditerranée"] },
+        { t: "EnR (suivi Marseille)", c: ["Kraken Subsea"] } ] },
+      { t: "📢 Canaux spéciaux", c: [
+        { t: "Appels à contribution", c: [
+          { t: "Plan Bleu", link: "https://planbleu.org/offre-emploi/" }, { t: "MedECC", link: "https://www.medecc.org/" },
+          { t: "FEMISE", link: "https://www.femise.org/" }, { t: "I4CE", link: "https://www.i4ce.org/" },
+          { t: "IDDRI", link: "https://www.iddri.org/fr" }, { t: "AFD (appels à projets)", link: "https://www.afd.fr/fr/appels-a-projets" },
+          { t: "ADEME (appels à projets)", link: "https://www.ademe.fr/les-appels-a-projets/" },
+          { t: "The Shift Project", link: "https://theshiftproject.org/en/home/" }, { t: "Climate-KIC", link: "https://www.climate-kic.org/opportunities/" } ] },
+        { t: "EnR Marseille / PACA", c: ["Solaire / photovoltaïque","Éolien","Hydrogène","Biomasse / méthanisation","Géothermie"] } ] },
+      { t: "🗂 Catégories du mail", c: ["🔵 Marseille","🟢 PACA hors Marseille","🏢 Entreprises ciblées","🏠 Télétravail / Remote","💰 Salaire élevé (≥ 55 k€)","🔴 Autres — Paris & France","📢 Appels à contribution","⚡ EnR Marseille"] },
+      { t: "🚫 Filtres & exclusions", collapsed: true, c: [
+        { t: "Contrats exclus", c: ["Stage / alternance / apprentissage","Junior / débutant","Service civique / VIE","Doctorat / PhD"] },
+        { t: "Métiers exclus", c: ["Technicien / opérateur / agent","Commercial pur (SDR / BDR / AE)","Dev logiciel (full-stack, devops…)","Achats / compta / RH","Chantier / travaux / MOE","Nucléaire / hydraulique MOE"] },
+        { t: "Autres exclusions", c: ["RSE sans angle climat","Lieu : La Garde","Employeur : Eqosphere"] } ] }
+    ] };
+    const root = mk(spec);
+    return { name: "Recherche d'emploi", layout: "both", root, sel: root.id };
+  }
+
+  // ---------- Démarrage ----------
+  function loadBook() {
+    try {
+      const raw = localStorage.getItem(BOOK_KEY);
+      if (raw) {
+        const b = JSON.parse(raw);
+        if (b && Array.isArray(b.sheets) && b.sheets.length) {
+          b.sheets.forEach(s => { adopt(s.root); s.layout = s.layout || "both"; s.name = s.name || "Feuille"; });
+          return { active: Math.min(Math.max(0, b.active | 0), b.sheets.length - 1), sheets: b.sheets };
+        }
+      }
+    } catch (e) {}
+    return null;
+  }
+  function migrateOld() {
+    let root = null, name = "Ma carte", layout = "both", firstRun = false;
+    try { const raw = localStorage.getItem(STORE_KEY); if (raw) { const d = JSON.parse(raw); if (d && d.root) { adopt(d.root); root = d.root; } } } catch (e) {}
+    try { const t = localStorage.getItem(TITLE_KEY); if (t) name = t; } catch (e) {}
+    try { const l = localStorage.getItem(LAYOUT_KEY); if (l === "right" || l === "down" || l === "both") layout = l; } catch (e) {}
+    if (!root) { root = freshDoc().root; try { firstRun = !localStorage.getItem(INIT_KEY); } catch (e) {} }
+    if (firstRun) { ["Idée 1", "Idée 2", "Idée 3"].forEach(t => root.children.push({ id: nid(), text: t, collapsed: false, children: [] })); try { localStorage.setItem(INIT_KEY, "1"); } catch (e) {} }
+    return { name, layout, root, sel: root.id };
+  }
+
+  try { if (localStorage.getItem(THEME_KEY) === "1") { document.body.classList.add("dark"); $("theme").textContent = "☀️"; } } catch (e) {}
+
+  book = loadBook() || { active: 0, sheets: [migrateOld()] };
+  // Ajoute la feuille « Recherche d'emploi » une seule fois (même pour un classeur existant).
+  let jobAdded = false; try { jobAdded = !!localStorage.getItem(JOB_KEY); } catch (e) {}
+  if (!jobAdded) { book.sheets.push(buildJobSheet()); try { localStorage.setItem(JOB_KEY, "1"); } catch (e) {} }
+
+  loadActive(); applyView(); render(); renderTabs(); fit(); refreshHistoryButtons();
 
   window.__mm = { render, get doc() { return doc; }, addChild, undo, redoAct, buildSVG, reparent, parseOutline,
+                  get book() { return book; }, addSheet, switchSheet, deleteSheet, get sheetCount() { return book.sheets.length; },
                   setLayout(l){ LAYOUT = l; $("layout").value = l; render(); fit(); },
                   generate(txt, replace){ const r = parseOutline(txt, ""); if(!r) return false; pushHistory(); if(replace!==false){doc={root:r};selId=r.id;} render(); fit(); return true; },
                   get sel() { return selId; } };

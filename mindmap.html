@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mind Map</title>
+<style>
+  :root {
+    --bg:#eef1ee; --panel:#ffffff; --ink:#16281f; --muted:#8a938c;
+    --line:#e3e8e4; --green:#2d6a4f; --green-d:#1b4332; --accent:#0f8a4f;
+    --sel:#f2a900;
+  }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); overflow:hidden; touch-action:none;
+  }
+
+  /* ---- Barre d'outils ---- */
+  #bar {
+    position:fixed; top:0; left:0; right:0; height:52px; z-index:20;
+    display:flex; align-items:center; gap:6px; padding:0 12px;
+    background:linear-gradient(135deg,var(--green),var(--green-d)); color:#fff;
+    box-shadow:0 1px 6px rgba(0,0,0,.15);
+  }
+  #bar h1 { font-size:15px; margin:0 10px 0 2px; white-space:nowrap; font-weight:600; }
+  #bar .spacer { flex:1; }
+  .btn {
+    appearance:none; border:0; cursor:pointer; font:inherit; font-size:13px;
+    color:#fff; background:rgba(255,255,255,.14); padding:7px 11px; border-radius:8px;
+    display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+  }
+  .btn:hover { background:rgba(255,255,255,.26); }
+  .btn:active { transform:translateY(1px); }
+  .btn.sm { padding:6px 8px; }
+  #bar .sep { width:1px; height:26px; background:rgba(255,255,255,.25); margin:0 4px; }
+
+  /* ---- Zone de dessin ---- */
+  #stage { position:absolute; inset:52px 0 0 0; overflow:hidden; cursor:grab; }
+  #stage.panning { cursor:grabbing; }
+  #canvas { position:absolute; top:0; left:0; transform-origin:0 0; will-change:transform; }
+  #edges { position:absolute; top:0; left:0; overflow:visible; pointer-events:none; }
+  #edges path { fill:none; stroke:#b9c6bd; stroke-width:2.4; }
+
+  .node {
+    position:absolute; display:flex; align-items:center; justify-content:center;
+    text-align:center; padding:8px 14px; border-radius:12px; background:#fff;
+    border:2px solid var(--green); color:var(--ink); font-size:14px; line-height:1.3;
+    box-shadow:0 2px 5px rgba(0,0,0,.08); cursor:pointer; user-select:none;
+    max-width:240px; min-width:44px; min-height:36px; word-break:break-word;
+  }
+  .node.root { background:linear-gradient(135deg,var(--green),var(--green-d)); color:#fff; border-color:var(--green-d); font-weight:600; font-size:15px; }
+  .node.sel { border-color:var(--sel); box-shadow:0 0 0 3px rgba(242,169,0,.35),0 2px 6px rgba(0,0,0,.12); }
+  .node[contenteditable="true"] { cursor:text; user-select:text; outline:none; }
+  .node .badge {
+    position:absolute; top:-9px; right:-9px; width:19px; height:19px; border-radius:50%;
+    background:var(--accent); color:#fff; font-size:11px; font-weight:700;
+    display:none; align-items:center; justify-content:center; box-shadow:0 1px 3px rgba(0,0,0,.25);
+  }
+  .node.collapsed .badge { display:flex; }
+
+  /* ---- Aide / pied ---- */
+  #hint {
+    position:fixed; left:12px; bottom:12px; z-index:15; max-width:min(92vw,560px);
+    background:var(--panel); border:1px solid var(--line); border-radius:10px;
+    padding:10px 12px; font-size:12.5px; color:var(--muted); box-shadow:0 2px 8px rgba(0,0,0,.06);
+  }
+  #hint b { color:var(--ink); }
+  #hint kbd {
+    background:#f2f4f2; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px;
+    padding:1px 5px; font-family:ui-monospace,Menlo,Consolas,monospace; font-size:11px; color:var(--ink);
+  }
+  #hint .close { float:right; cursor:pointer; color:var(--muted); margin-left:8px; }
+  #zoomlbl {
+    position:fixed; right:12px; bottom:12px; z-index:15; background:var(--panel);
+    border:1px solid var(--line); border-radius:8px; padding:6px 9px; font-size:12px;
+    color:var(--muted); box-shadow:0 2px 8px rgba(0,0,0,.06);
+  }
+  .swatches { display:flex; gap:4px; }
+  .swatch { width:20px; height:20px; border-radius:50%; cursor:pointer; border:2px solid rgba(255,255,255,.6); }
+  .swatch:hover { transform:scale(1.12); }
+  input[type=file] { display:none; }
+</style>
+</head>
+<body>
+
+<div id="bar">
+  <h1>🧠 Mind Map</h1>
+  <button class="btn sm" id="addChild" title="Ajouter un enfant (Tab)">＋ Enfant</button>
+  <button class="btn sm" id="addSib" title="Ajouter un frère (Entrée)">＋ Frère</button>
+  <button class="btn sm" id="del" title="Supprimer (Suppr)">🗑</button>
+  <button class="btn sm" id="edit" title="Renommer (F2 / double-clic)">✎</button>
+  <div class="sep"></div>
+  <div class="swatches" id="colors"></div>
+  <div class="sep"></div>
+  <button class="btn sm" id="fit" title="Recentrer (F)">⤢ Ajuster</button>
+  <button class="btn sm" id="zin">＋</button>
+  <button class="btn sm" id="zout">－</button>
+  <div class="spacer"></div>
+  <button class="btn sm" id="save">💾 JSON</button>
+  <button class="btn sm" id="loadBtn">📂 Ouvrir</button>
+  <button class="btn sm" id="md">⤓ Markdown</button>
+  <button class="btn sm" id="neu">🆕 Nouveau</button>
+  <input type="file" id="file" accept=".json,application/json">
+</div>
+
+<div id="stage">
+  <div id="canvas">
+    <svg id="edges"></svg>
+  </div>
+</div>
+
+<div id="hint">
+  <span class="close" id="hintClose">✕</span>
+  <b>Raccourcis&nbsp;:</b>
+  <kbd>Tab</kbd> enfant · <kbd>Entrée</kbd> frère · <kbd>F2</kbd> renommer ·
+  <kbd>Suppr</kbd> supprimer · <kbd>Espace</kbd> replier/déplier ·
+  <kbd>↑↓←→</kbd> naviguer · <kbd>F</kbd> recentrer · molette&nbsp;=&nbsp;zoom ·
+  glisser le fond = déplacer. Sauvegarde automatique dans le navigateur.
+</div>
+<div id="zoomlbl">100&nbsp;%</div>
+
+<script>
+"use strict";
+(function () {
+  // ---------- Modèle ----------
+  const PALETTE = ["#2d6a4f","#0f8a4f","#2f7fa6","#8a5cf6","#d1495b","#e08e0b","#5a6b60"];
+  let uid = 1;
+  const nid = () => "n" + (uid++);
+
+  function freshDoc() {
+    return { root: { id: nid(), text: "Sujet central", color: PALETTE[0], collapsed: false, children: [] } };
+  }
+
+  const STORE_KEY = "mindmap.doc.v1";
+  let doc, selId, editing = false;
+
+  function loadDoc() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (raw) {
+        const d = JSON.parse(raw);
+        if (d && d.root) { normalizeIds(d.root); return d; }
+      }
+    } catch (e) { /* ignore */ }
+    return freshDoc();
+  }
+  function normalizeIds(node) {
+    // Réassigne des ids uniques et garantit le compteur au-dessus du max.
+    node.id = nid();
+    node.color = node.color || PALETTE[0];
+    node.collapsed = !!node.collapsed;
+    node.children = Array.isArray(node.children) ? node.children : [];
+    node.children.forEach(normalizeIds);
+  }
+  function persist() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(stripDoc())); } catch (e) {}
+  }
+  function stripDoc() {
+    const clean = (n) => ({ text: n.text, color: n.color, collapsed: n.collapsed, children: n.children.map(clean) });
+    return { root: clean(doc.root) };
+  }
+
+  // ---------- Utilitaires d'arbre ----------
+  function find(id, node = doc.root, parent = null) {
+    if (node.id === id) return { node, parent };
+    for (const c of node.children) {
+      const r = find(id, c, node);
+      if (r) return r;
+    }
+    return null;
+  }
+  function selected() { const r = find(selId); return r ? r.node : doc.root; }
+
+  // ---------- Mesure & mise en page ----------
+  const NODE_H = 40, V_GAP = 16, H_GAP = 72;
+  function nodeWidth(node) {
+    const len = (node.text || "").length;
+    const base = node === doc.root ? 34 : 28;
+    return Math.max(64, Math.min(240, len * 8.2 + base));
+  }
+  function visibleChildren(node) { return node.collapsed ? [] : node.children; }
+
+  function measure(node) {
+    const kids = visibleChildren(node);
+    if (!kids.length) { node._ext = NODE_H; return NODE_H; }
+    let sum = 0;
+    kids.forEach(c => { sum += measure(c); });
+    sum += V_GAP * (kids.length - 1);
+    node._ext = Math.max(NODE_H, sum);
+    return node._ext;
+  }
+  function place(node, x, cy, dir) {
+    node._x = x; node._cy = cy; node._w = nodeWidth(node);
+    const kids = visibleChildren(node);
+    if (!kids.length) return;
+    const total = kids.reduce((s, c) => s + c._ext, 0) + V_GAP * (kids.length - 1);
+    let y = cy - total / 2;
+    for (const c of kids) {
+      const ccy = y + c._ext / 2;
+      const cw = nodeWidth(c);
+      const cx = dir > 0 ? x + node._w + H_GAP : x - H_GAP - cw;
+      place(c, cx, ccy, dir);
+      y += c._ext + V_GAP;
+    }
+  }
+  function layout() {
+    // Racine centrée, enfants répartis à gauche et à droite pour un vrai éventail.
+    const root = doc.root;
+    root._w = nodeWidth(root);
+    const kids = visibleChildren(root);
+    root._sides = new Map();
+    if (!kids.length) { root._x = 0; root._cy = 0; return; }
+    const right = [], left = [];
+    kids.forEach((c, i) => (i % 2 === 0 ? right : left).push(c));
+    const sideExt = (arr) => { let s = 0; arr.forEach(c => { s += measure(c); }); return s + V_GAP * Math.max(0, arr.length - 1); };
+    measure(root);
+    root._x = 0; root._cy = 0;
+    const lay = (arr, dir) => {
+      const total = sideExt(arr);
+      let y = -total / 2;
+      for (const c of arr) {
+        const ccy = y + c._ext / 2;
+        const cw = nodeWidth(c);
+        const cx = dir > 0 ? root._w + H_GAP : -H_GAP - cw;
+        place(c, cx, ccy, dir);
+        arr.forEach(k => root._sides.set(k.id, dir));
+        y += c._ext + V_GAP;
+      }
+    };
+    lay(right, 1); lay(left, -1);
+  }
+
+  // ---------- Rendu ----------
+  const stage = document.getElementById("stage");
+  const canvas = document.getElementById("canvas");
+  const edges = document.getElementById("edges");
+  let view = { x: 0, y: 0, k: 1 };
+  const nodeEls = new Map();
+
+  function applyView() {
+    canvas.style.transform = `translate(${view.x}px,${view.y}px) scale(${view.k})`;
+    document.getElementById("zoomlbl").textContent = Math.round(view.k * 100) + " %";
+  }
+
+  function render() {
+    layout();
+    // Nœuds
+    const seen = new Set();
+    const walk = (node, dir) => {
+      seen.add(node.id);
+      let el = nodeEls.get(node.id);
+      if (!el) {
+        el = document.createElement("div");
+        el.className = "node";
+        el.dataset.id = node.id;
+        const badge = document.createElement("span");
+        badge.className = "badge";
+        el.appendChild(badge);
+        canvas.appendChild(el);
+        nodeEls.set(node.id, el);
+        wireNode(el);
+      }
+      const isRoot = node === doc.root;
+      el.classList.toggle("root", isRoot);
+      el.classList.toggle("sel", node.id === selId);
+      el.classList.toggle("collapsed", node.collapsed && node.children.length > 0);
+      el.firstChild.textContent = node.children.length; // badge count
+      // texte (préserve le badge en 1er enfant)
+      let txt = el.childNodes[1];
+      if (!txt) { txt = document.createTextNode(""); el.appendChild(txt); }
+      if (txt.textContent !== node.text) txt.textContent = node.text;
+      if (!isRoot) { el.style.borderColor = node.color; }
+      el.style.left = node._x + "px";
+      el.style.top = (node._cy - NODE_H / 2) + "px";
+      el.style.minHeight = NODE_H + "px";
+      for (const c of visibleChildren(node)) walk(c, dir);
+    };
+    walk(doc.root, 1);
+    // Purge des nœuds disparus
+    for (const [id, el] of nodeEls) {
+      if (!seen.has(id)) { el.remove(); nodeEls.delete(id); }
+    }
+    drawEdges();
+    persist();
+  }
+
+  function drawEdges() {
+    let d = "";
+    const bounds = { minX: -80, minY: -80, maxX: 80, maxY: 80 };
+    const consider = (n) => {
+      bounds.minX = Math.min(bounds.minX, n._x - 20);
+      bounds.minY = Math.min(bounds.minY, n._cy - 60);
+      bounds.maxX = Math.max(bounds.maxX, n._x + n._w + 20);
+      bounds.maxY = Math.max(bounds.maxY, n._cy + 60);
+    };
+    const walk = (node) => {
+      consider(node);
+      for (const c of visibleChildren(node)) {
+        const dir = c._x >= node._x ? 1 : -1;
+        const x1 = dir > 0 ? node._x + node._w : node._x;
+        const y1 = node._cy;
+        const x2 = dir > 0 ? c._x : c._x + c._w;
+        const y2 = c._cy;
+        const mx = (x1 + x2) / 2;
+        d += `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2} `;
+        walk(c);
+      }
+    };
+    walk(doc.root);
+    edges.setAttribute("d0", "");
+    edges.innerHTML = `<path d="${d}"></path>`;
+    edges.style.left = bounds.minX + "px";
+    edges.style.top = bounds.minY + "px";
+    edges.setAttribute("width", bounds.maxX - bounds.minX);
+    edges.setAttribute("height", bounds.maxY - bounds.minY);
+    edges.setAttribute("viewBox", `${bounds.minX} ${bounds.minY} ${bounds.maxX - bounds.minX} ${bounds.maxY - bounds.minY}`);
+    edges.style.transform = `translate(${-bounds.minX}px,${-bounds.minY}px)`;
+    edges._bounds = bounds;
+  }
+
+  // ---------- Sélection & édition ----------
+  function select(id) {
+    if (selId === id) return;
+    commitEdit();
+    selId = id;
+    render();
+  }
+
+  function startEdit(id) {
+    const el = nodeEls.get(id);
+    if (!el) return;
+    select(id); editing = true;
+    el.setAttribute("contenteditable", "true");
+    // isole le texte pour l'édition (masque le badge visuellement)
+    const node = find(id).node;
+    el.childNodes.forEach(n => { if (n.nodeType === 3) n.textContent = node.text; });
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+  }
+  function commitEdit() {
+    if (!editing) return;
+    editing = false;
+    const el = nodeEls.get(selId);
+    if (el) {
+      el.removeAttribute("contenteditable");
+      const node = find(selId).node;
+      const t = (el.textContent || "").replace(/\s+/g, " ").trim();
+      node.text = t || "…";
+    }
+    render();
+  }
+
+  function addChild(id) {
+    const node = find(id).node;
+    node.collapsed = false;
+    const c = { id: nid(), text: "Nouvelle idée", color: node === doc.root ? PALETTE[(node.children.length + 1) % PALETTE.length] : node.color, collapsed: false, children: [] };
+    node.children.push(c);
+    selId = c.id; render(); startEdit(c.id);
+  }
+  function addSibling(id) {
+    const r = find(id);
+    if (!r.parent) return addChild(id); // la racine n'a pas de frère
+    const c = { id: nid(), text: "Nouvelle idée", color: r.node.color, collapsed: false, children: [] };
+    const i = r.parent.children.indexOf(r.node);
+    r.parent.children.splice(i + 1, 0, c);
+    selId = c.id; render(); startEdit(c.id);
+  }
+  function removeNode(id) {
+    const r = find(id);
+    if (!r.parent) { // racine : on la vide plutôt que de la supprimer
+      if (doc.root.children.length) { doc.root.children = []; render(); }
+      return;
+    }
+    const i = r.parent.children.indexOf(r.node);
+    r.parent.children.splice(i, 1);
+    selId = r.parent.id; render();
+  }
+  function toggleCollapse(id) {
+    const node = find(id).node;
+    if (node.children.length) { node.collapsed = !node.collapsed; render(); }
+  }
+
+  // Navigation clavier dans l'arbre
+  function navigate(dir) {
+    const r = find(selId);
+    if (!r) return;
+    const node = r.node, parent = r.parent;
+    const side = doc.root._sides ? (doc.root._sides.get(node.id) || 1) : 1;
+    if (dir === "right" || dir === "left") {
+      const into = (dir === "right") ? 1 : -1;
+      if (node === doc.root) {
+        const cand = visibleChildren(node).find(c => (doc.root._sides.get(c.id) || 1) === into);
+        if (cand) select(cand.id);
+      } else if (into === side) {
+        if (visibleChildren(node).length) select(visibleChildren(node)[0].id);
+      } else if (parent) {
+        select(parent.id);
+      }
+    } else if ((dir === "up" || dir === "down") && parent) {
+      const sibs = parent.children;
+      const i = sibs.indexOf(node);
+      const j = dir === "up" ? i - 1 : i + 1;
+      if (j >= 0 && j < sibs.length) select(sibs[j].id);
+    }
+  }
+
+  // ---------- Interactions souris/clavier ----------
+  function wireNode(el) {
+    el.addEventListener("mousedown", (e) => { e.stopPropagation(); });
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (editing && el.getAttribute("contenteditable")) return;
+      select(el.dataset.id);
+    });
+    el.addEventListener("dblclick", (e) => { e.stopPropagation(); startEdit(el.dataset.id); });
+    el.addEventListener("keydown", (e) => {
+      if (!editing) return;
+      if (e.key === "Enter") { e.preventDefault(); commitEdit(); }
+      if (e.key === "Escape") { e.preventDefault(); commitEdit(); }
+      e.stopPropagation();
+    });
+    el.addEventListener("blur", () => { if (editing) commitEdit(); });
+  }
+
+  document.addEventListener("keydown", (e) => {
+    if (editing) return;
+    const tag = (e.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea") return;
+    switch (e.key) {
+      case "Tab": e.preventDefault(); addChild(selId); break;
+      case "Enter": e.preventDefault(); addSibling(selId); break;
+      case "F2": e.preventDefault(); startEdit(selId); break;
+      case "Delete": case "Backspace": e.preventDefault(); removeNode(selId); break;
+      case " ": e.preventDefault(); toggleCollapse(selId); break;
+      case "ArrowUp": e.preventDefault(); navigate("up"); break;
+      case "ArrowDown": e.preventDefault(); navigate("down"); break;
+      case "ArrowLeft": e.preventDefault(); navigate("left"); break;
+      case "ArrowRight": e.preventDefault(); navigate("right"); break;
+      case "f": case "F": fit(); break;
+      case "+": case "=": zoomAt(stage.clientWidth/2, stage.clientHeight/2, 1.15); break;
+      case "-": zoomAt(stage.clientWidth/2, stage.clientHeight/2, 1/1.15); break;
+    }
+  });
+
+  // Pan (glisser le fond)
+  let pan = null;
+  stage.addEventListener("mousedown", (e) => {
+    commitEdit();
+    pan = { sx: e.clientX, sy: e.clientY, vx: view.x, vy: view.y };
+    stage.classList.add("panning");
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!pan) return;
+    view.x = pan.vx + (e.clientX - pan.sx);
+    view.y = pan.vy + (e.clientY - pan.sy);
+    applyView();
+  });
+  window.addEventListener("mouseup", () => { pan = null; stage.classList.remove("panning"); });
+
+  // Zoom molette centré sur le curseur
+  function zoomAt(px, py, factor) {
+    const nk = Math.max(0.25, Math.min(3, view.k * factor));
+    const r = stage.getBoundingClientRect();
+    const cx = px - r.left, cy = py - r.top;
+    view.x = cx - (cx - view.x) * (nk / view.k);
+    view.y = cy - (cy - view.y) * (nk / view.k);
+    view.k = nk; applyView();
+  }
+  stage.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.1 : 1/1.1);
+  }, { passive: false });
+
+  // Recentrer / ajuster
+  function fit() {
+    const b = edges._bounds || { minX: -100, minY: -100, maxX: 100, maxY: 100 };
+    const w = b.maxX - b.minX, h = b.maxY - b.minY;
+    const pad = 60;
+    const k = Math.max(0.25, Math.min(2, Math.min((stage.clientWidth - pad) / w, (stage.clientHeight - pad) / h)));
+    view.k = k;
+    view.x = (stage.clientWidth - w * k) / 2 - b.minX * k;
+    view.y = (stage.clientHeight - h * k) / 2 - b.minY * k;
+    applyView();
+  }
+
+  // Tactile : pan à un doigt, pinch à deux doigts
+  let touch = null;
+  stage.addEventListener("touchstart", (e) => {
+    commitEdit();
+    if (e.touches.length === 1) {
+      const t = e.touches[0];
+      touch = { mode: "pan", sx: t.clientX, sy: t.clientY, vx: view.x, vy: view.y };
+    } else if (e.touches.length === 2) {
+      const [a, b] = e.touches;
+      touch = { mode: "pinch", d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+                cx: (a.clientX + b.clientX) / 2, cy: (a.clientY + b.clientY) / 2, k: view.k };
+    }
+  }, { passive: false });
+  stage.addEventListener("touchmove", (e) => {
+    if (!touch) return;
+    e.preventDefault();
+    if (touch.mode === "pan" && e.touches.length === 1) {
+      const t = e.touches[0];
+      view.x = touch.vx + (t.clientX - touch.sx);
+      view.y = touch.vy + (t.clientY - touch.sy);
+      applyView();
+    } else if (touch.mode === "pinch" && e.touches.length === 2) {
+      const [a, b] = e.touches;
+      const nd = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      const target = Math.max(0.25, Math.min(3, touch.k * (nd / touch.d)));
+      zoomAt(touch.cx, touch.cy, target / view.k);
+    }
+  }, { passive: false });
+  stage.addEventListener("touchend", () => { touch = null; });
+
+  // ---------- Barre d'outils ----------
+  const $ = (id) => document.getElementById(id);
+  $("addChild").onclick = () => addChild(selId);
+  $("addSib").onclick = () => addSibling(selId);
+  $("del").onclick = () => removeNode(selId);
+  $("edit").onclick = () => startEdit(selId);
+  $("fit").onclick = fit;
+  $("zin").onclick = () => zoomAt(stage.clientWidth/2, stage.clientHeight/2, 1.15);
+  $("zout").onclick = () => zoomAt(stage.clientWidth/2, stage.clientHeight/2, 1/1.15);
+  $("neu").onclick = () => {
+    if (confirm("Nouvelle carte ? La carte actuelle sera remplacée (pense à exporter en JSON si besoin).")) {
+      doc = freshDoc(); selId = doc.root.id; render(); fit();
+    }
+  };
+
+  // Palette de couleurs
+  const colorsWrap = $("colors");
+  PALETTE.forEach(col => {
+    const s = document.createElement("span");
+    s.className = "swatch"; s.style.background = col;
+    s.title = "Colorer le nœud";
+    s.onclick = () => { const n = selected(); if (n !== doc.root) { n.color = col; render(); } };
+    colorsWrap.appendChild(s);
+  });
+
+  // Export / import
+  function download(name, text, type) {
+    const blob = new Blob([text], { type: type || "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+  $("save").onclick = () => download("mindmap.json", JSON.stringify(stripDoc(), null, 2), "application/json");
+  $("md").onclick = () => {
+    let out = "";
+    const walk = (n, depth) => {
+      if (depth === 0) out += "# " + n.text + "\n\n";
+      else out += "  ".repeat(depth - 1) + "- " + n.text + "\n";
+      n.children.forEach(c => walk(c, depth + 1));
+    };
+    walk(doc.root, 0);
+    download("mindmap.md", out, "text/markdown;charset=utf-8");
+  };
+  $("loadBtn").onclick = () => $("file").click();
+  $("file").onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const d = JSON.parse(r.result);
+        if (!d || !d.root) throw new Error("format");
+        normalizeIds(d.root); doc = d; selId = doc.root.id; render(); fit();
+      } catch (err) { alert("Fichier JSON invalide."); }
+    };
+    r.readAsText(f);
+    e.target.value = "";
+  };
+
+  $("hintClose").onclick = () => { $("hint").style.display = "none"; };
+
+  // ---------- Démarrage ----------
+  doc = loadDoc();
+  selId = doc.root.id;
+  applyView();
+  render();
+  // Si carte fraîche (sujet unique), on ajoute quelques branches d'exemple.
+  if (!doc.root.children.length && !localStorage.getItem(STORE_KEY + ".init")) {
+    ["Idée 1", "Idée 2", "Idée 3"].forEach(t => doc.root.children.push({ id: nid(), text: t, color: PALETTE[(doc.root.children.length + 1) % PALETTE.length], collapsed: false, children: [] }));
+    try { localStorage.setItem(STORE_KEY + ".init", "1"); } catch (e) {}
+    render();
+  }
+  fit();
+})();
+</script>
+</body>
+</html>
